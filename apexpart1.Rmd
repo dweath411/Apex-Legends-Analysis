@@ -1,0 +1,803 @@
+---
+title: "Python-to-R-Apex"
+author: "djamesw"
+date: "2024-03-13"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Overview
+
+###############################################################################
+
+The data set used for this analysis is based on the game Apex Legends. I collected the data myself, over the course of 30+ weeks using the stats provided by the game at the end of every match. The same three players are the only three players in the data. Only games where we placed top 5 are included. Since I collected it myself, there should be no need for any pre-processing. The goal is get an intermediate analysis from our games to see what works best and what may not work the best. 
+
+Evaluation may be used using regression models or tree based methods.
+
+Explanation of the variables in the dataset:
+
+- djdmg, popdmg, spoondmg: The amount of damage each user accumulated during the match
+- djkill, popkill, spoonkill: The amount of kills each user accumulated during the match
+- location: The map the match was played on. There are three maps used in this rotation; World's Edge (WE), Olympus (OL), and Kings Canyon (KC)
+- dlegend, plegend, slegend: The legend each user used during that match
+- placing: The placement we received at the end of the match. This number is 1-5
+- date: Calendar date the match was played on
+- day: Calendar day the match was played on
+- mode: The game mode the match was played on. This is either ranked or pub (public)
+
+################################################################################
+
+```{r packages, include=FALSE}
+library(ggplot2)
+library(ggcorrplot)
+library(dplyr)
+library(forcats)
+library(plotrix)
+```
+
+## Load data into R
+
+```{r data}
+data <- read.csv("apex2022.csv")
+
+# dropping columns
+data <- data[, !(names(data) %in% c('Time.of.Day', 'Week', 'X'))]
+
+# lowercase column names
+names(data) <- tolower(names(data))
+
+# standardize mode 
+data$mode <- tolower(trimws(data$mode))
+
+head(data)
+```
+After loading the data, I got rid of the columns 'Time of Day' and 'Week' and also lowercased the column names.
+
+
+## Check data
+
+```{r check data}
+# fix wrong capitalization
+data$dlegend <- ifelse(data$dlegend == 'GIbraltar', 'Gibraltar', data$dlegend)
+
+# count null values
+print(colSums(is.na(data)))
+
+# describe data
+summary(data)
+```
+There was a wrongly capitalized legend name in the data when I checked it, so that had to be corrected. Everything else looked normal. No null values either.
+
+# User-Legend data analysis
+
+## Usage per user, per legend
+
+```{r usage per legend, per user}
+legend_counts <- list()
+legend_columns <- c('dlegend', 'plegend', 'slegend')
+
+for (column in legend_columns) {
+  counts <- table(data[[column]])
+  legend_counts[[column]] <- counts
+}
+
+for (column_name in names(legend_counts)) {
+  cat("Player:", column_name, "\n")
+  print(legend_counts[[column_name]])
+}
+```
+DJ used Pathfinder the most, Pop used Bloodhound the most, and Spoon used Octane a ton. This may cause outliers in some parts of the data.
+
+## Highest damage per user, per legend
+
+```{r highest damage for each user, echo=FALSE}
+# highest_damage <- list()
+# damage_columns <- c('djdmg', 'popdmg', 'spoondmg')
+# 
+# for (i in seq_along(damage_columns)) {
+#   agg_result <- aggregate(data[[damage_columns[i]]], by = list(data[[legend_columns[i]]]), max)
+#   sorted_agg_result <- agg_result[order(agg_result$x, decreasing = TRUE),]  # sort by damage, descending
+#   highest_damage[[i]] <- sorted_agg_result
+# }
+# 
+# for (i in seq_along(highest_damage)) {
+#   cat("User:", damage_columns[i], "\n")
+#   for (row in 1:nrow(highest_damage[[i]])) {
+#     cat(highest_damage[[i]][row, "Group.1"],":",highest_damage[[i]][row, "x"], "\n")
+#   }
+#   cat("\n")
+# }
+
+# Above code commented since the previous version is easier to read
+
+highest_damage_dj <- aggregate(data$djdmg, by = list(data$dlegend), max)
+names(highest_damage_dj) <- c("dlegend", "djdmg")
+highest_damage_dj <- highest_damage_dj[order(-highest_damage_dj$djdmg),]
+
+highest_damage_pop <- aggregate(data$popdmg, by = list(data$plegend), max)
+names(highest_damage_pop) <- c("plegend", "popdmg")
+highest_damage_pop <- highest_damage_pop[order(-highest_damage_pop$popdmg),]
+
+highest_damage_spoon <- aggregate(data$spoondmg, by = list(data$slegend), max)
+names(highest_damage_spoon) <- c("slegend", "spoondmg")
+highest_damage_spoon <- highest_damage_spoon[order(-highest_damage_spoon$spoondmg),]
+
+print(highest_damage_dj)
+print(highest_damage_pop)
+print(highest_damage_spoon)
+```
+Despite using Octane an extreme amount, Spoon actually has his highest damage with Bangalore. Pop's highest damage is Valkyrie, with Bloodhound ranking 3rd. 
+
+## Highest kills per user, per legend
+
+```{r highest kills per user, per legend, echo=FALSE}
+# initialize
+highest_kills <- list()
+
+# list of columns containing kill data
+kill_columns <- c('djkill', 'popkill', 'spoonkill')
+
+# list of corresponding legend column names
+legend_columns <- c('dlegend', 'plegend', 'slegend')
+
+# iterate over each pair of kill and legend columns
+for (i in seq_along(kill_columns)) {
+  # get the highest kills for each user per character
+  highest_kills[[kill_columns[i]]] <- aggregate(data[[kill_columns[i]]], by = list(data[[legend_columns[i]]]), max)
+  names(highest_kills[[kill_columns[i]]]) <- c(legend_columns[i], kill_columns[i])
+  highest_kills[[kill_columns[i]]] <- highest_kills[[kill_columns[i]]][order(-highest_kills[[kill_columns[i]]][, kill_columns[i]]),]
+}
+
+# print
+for (i in seq_along(highest_kills)) {
+  print(highest_kills[[i]])
+}
+
+```
+Again, despite being a popular character for Spoon, his Octane fell short from having the highest kills and damage stat from his pool of characters. DJ's Pathfinder remains consistent in highest damage and kill stat from his pool of characters.
+
+## Summation data per user, per legend
+```{r summation, echo=FALSE}
+# initialize
+legend_summation <- list()
+
+# list of columns and corresponding legend columns
+columns <- c('djdmg', 'djkill', 'popdmg', 'popkill', 'spoondmg', 'spoonkill')
+legend_columns <- c('dlegend', 'plegend', 'slegend')
+
+# iterate over each pair of columns and legend columns
+for (i in seq_along(columns)) {
+  if (i %% 2 != 0) {
+    # get corresponding legend column
+    legend_column <- legend_columns[(i + 1) %/% 2]
+    # group by legend and aggregate sum of damage and kills
+    legend_summation[[legend_column]] <- aggregate(cbind(data[[columns[i]]], data[[columns[i + 1]]]), by = list(data[[legend_column]]), sum)
+    names(legend_summation[[legend_column]]) <- c(legend_column, columns[i], columns[i + 1])
+    # sort values by damage and kills, descending
+    legend_summation[[legend_column]] <- legend_summation[[legend_column]][order(-legend_summation[[legend_column]][, columns[i]], -legend_summation[[legend_column]][, columns[i + 1]]), ]
+  }
+}
+
+# print
+for (i in seq_along(legend_summation)) {
+  print(legend_summation[[i]])
+}
+```
+What is shown here is each players summed kills and damage with each character they play.
+Spoon's Octane usage finally shows here, with almost double as much damage and kills on one character than Pop and DJ's top legend combined.
+
+## Each users best legend
+```{r best legend, echo=FALSE}
+# calculate the maximum damage and kills for each legend for DJ 
+best_legend_dj <- aggregate(cbind(data$djdmg, data$djkill), by = list(data$dlegend), FUN = max)
+names(best_legend_dj) <- c("dlegend", "djdmg", "djkill")
+best_legend_dj <- best_legend_dj[order(-best_legend_dj$djdmg, -best_legend_dj$djkill),]
+
+# calculate the maximum damage and kills for each legend for Pop
+best_legend_pop <- aggregate(cbind(data$popdmg, data$popkill), by = list(data$plegend), FUN = max)
+names(best_legend_pop) <- c("plegend", "popdmg", "popkill")
+best_legend_pop <- best_legend_pop[order(-best_legend_pop$popdmg, -best_legend_pop$popkill),]
+
+# calculate the maximum damage and kills for each legend for Spoon
+best_legend_spoon <- aggregate(cbind(data$spoondmg, data$spoonkill), by = list(data$slegend), FUN = max)
+names(best_legend_spoon) <- c("slegend", "spoondmg", "spoonkill")
+best_legend_spoon <- best_legend_spoon[order(-best_legend_spoon$spoondmg, -best_legend_spoon$spoonkill),]
+
+# print
+print(best_legend_dj)
+print(best_legend_pop)
+print(best_legend_spoon)
+```
+If you look at the MAX damage and kills to see the best legend for each user, it looks to be what you expect. Let's check what would happen if we took the average.
+
+### Each users best legend (by average)
+
+```{r best legend, by average}
+
+# calculate the averages and counts for each legend for dj
+best_legend_dj_avg <- data %>%
+  group_by(dlegend) %>%
+  summarise(
+    avg_dj_dmg = mean(djdmg),
+    avg_dj_kill = mean(djkill),
+    count = n()
+  ) %>% 
+  filter(count > 20) %>% # filter out legends with less than 20 uses since we're taking average
+  arrange(desc(avg_dj_dmg), desc(avg_dj_kill))
+
+# calculate the averages and counts for each legend for pop
+best_legend_pop_avg <- data %>%
+  group_by(plegend) %>%
+  summarise(
+    avg_pop_dmg = mean(popdmg),
+    avg_pop_kill = mean(popkill),
+    count = n()
+  ) %>% 
+  filter(count > 20) %>% # filter out legends with less than 20 uses since we're taking average
+  arrange(desc(avg_pop_dmg), desc(avg_pop_kill))
+
+# calculate the averages and counts for each legend for spoon
+best_legend_spoon_avg <- data %>%
+  group_by(slegend) %>%
+  summarise(
+    avg_spoon_dmg = mean(spoondmg),
+    avg_spoon_kill = mean(spoonkill),
+    count = n()
+  ) %>%
+  filter(count > 20) %>% # filter out legends with less than 20 uses since we're taking average
+  arrange(desc(avg_spoon_dmg), desc(avg_spoon_kill))
+
+print(best_legend_dj_avg)
+print(best_legend_pop_avg)
+print(best_legend_spoon_avg)
+```
+Interestingly enough, the best legend didn't change for anybody except for DJ, with Revenant shooting up multiple placements vs his placement using the max damage and kills. It could be due to Pathfinder having double the game count than Revenant. Regardless, Pathfinder will still be counted as DJ's best legend.
+
+### Best Legend (by Win Rate)
+
+```{r character win rates, echo=FALSE}
+# define a function to calculate win rates
+calculate_win_rate <- function(data, legend_column, placing_column) {
+  # group data by legend and placing to count the number of 1st place finishes
+  win_counts <- table(data[[legend_column]], data[[placing_column]])
+  
+  # extract 1st place finishes
+  first_place_counts <- win_counts[, "1"]
+  
+  # total number of times each legend was used
+  total_usage <- table(data[[legend_column]])
+  
+  # win rates
+  win_rates <- first_place_counts / total_usage
+  
+  return(win_rates)
+}
+
+legend_columns <- c("dlegend", "plegend", "slegend")
+placing_column <- "placing"
+
+# win rates for each legend pick
+win_rates <- lapply(legend_columns, function(legend_column) {
+  calculate_win_rate(data, legend_column, placing_column)
+})
+
+ # printing
+for (i in seq_along(legend_columns)) {
+  legend <- legend_columns[i]
+  cat("Win rates for", legend, ":\n")
+  print(win_rates[[i]])
+  cat("\n")
+}
+
+```
+Win rate for each legend was found by finding the number of wins a user has with that legend divided by the total number of times the legend was used by that user. Going by win rate alone, Lifeline is DJ's best, Wattson is Pop's best, and Gibraltar (he only had one game where he won on Gibraltar) or Valkyrie is Spoon's best. 
+
+# Plotting data
+
+## Plotting each players best legend
+
+##### DJ's Pathfinder
+```{r Pathfinder, echo=FALSE}
+# filter the data for games with Pathfinder for DJ
+path_dj <- data %>%
+  filter(dlegend == "Pathfinder")
+
+# calculate the average damage for Path for DJ
+avg_path_dmg <- mean(path_dj$djdmg)
+
+# Create the plot
+ggplot(path_dj, aes(x = 1, y = djdmg)) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  geom_hline(yintercept = avg_path_dmg, color = "red", linetype = "dashed") +
+  labs(x = "Pathfinder (DJ)", y = "Damage") +
+  theme_minimal()
+```
+
+Most of DJ's Pathfinder damage falls along the average, with a few outliers.
+
+##### Pop's Valkyrie
+```{r Valkyrie, echo=FALSE}
+# filter the data for games with Bloodhound for Pop
+blood_pop <- data %>%
+  filter(plegend == "Bloodhound")
+
+# calculate the average damage for Bloodhound for Pop
+avg_blood_dmg <- mean(blood_pop$popdmg)
+
+# create the plot
+ggplot(blood_pop, aes(x = 1, y = popdmg)) +
+  geom_jitter(width = 0.1, alpha = 0.7) +
+  geom_hline(yintercept = avg_blood_dmg, color = "darkgreen", linetype = "dashed") +
+  labs(x = "Bloodhound (Pop)", y = "Damage") +
+  theme_minimal()
+```
+
+Pop's damage with Bloodhound looks like it's more prone to having outliers, where less of Pop's games fall along the average.
+
+##### Spoon's Bangalore
+```{r Bangalore, echo=FALSE}
+# filter the data for games with Bangalore for spoon
+bang_spoon <- data %>%
+  filter(slegend == "Bangalore")
+
+# calculate the average damage for Bangalore for spoon
+avg_bang_dmg <- mean(bang_spoon$spoondmg)
+
+# create the plot
+ggplot(bang_spoon, aes(x = 1, y = spoondmg)) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  geom_hline(yintercept = avg_bang_dmg, color = "blue", linetype = "dashed") +
+  labs(x = "Bangalore (Spoon)", y = "Damage") +
+  theme_minimal()
+```
+
+Spoon's damage seems to be consistent with the average, not shooting too far above or below it.
+
+## Correlation matrix plot
+```{r correlation matrix}
+# get the numeric columns for the correlation matrix
+numeric_data <- data[c('djdmg', 'djkill', 'popdmg', 'popkill', 'spoondmg', 'spoonkill')]
+
+# calculate correlation matrix
+corr_matrix <- cor(numeric_data)
+
+# plot matrix
+ggcorrplot(corr = corr_matrix, lab_size = 4, tl.cex = 5, 
+           lab = T, title = "Correlation heatmap", hc.order = T)
+```
+
+It looks like each players kills and damage alike is positively correlated with themselves, but there isn't much correlation between each players kills and damage with another player. Not much what I was expected, I figured if one player did good in one game, then the other 2 would also do somewhat good.
+
+## What days of the week did we play most?
+
+```{r days of the week, echo=FALSE}
+# calculate the total games played per day
+games_per_day <- aggregate(cbind(games_played = rep(1, nrow(data))) ~ day, data = data, FUN = sum)
+
+# order days of the week starting from Sunday
+games_per_day$day <- factor(games_per_day$day, levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+# plot the distribution 
+bar_chart <- ggplot(games_per_day, aes(x = day, y = games_played, fill = day)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Day of the Week", y = "Total Games Played") +
+  ggtitle("Bar Chart of Games Played by Day") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_brewer(palette = "Paired")
+
+# chart
+print(bar_chart)
+
+# what about which day was our best? which day let us get the most wins overall.
+
+# calculate the number of times placed 1st for each day
+first_place_days <- aggregate(cbind(first_place_count = as.integer(data$placing == "1")) ~ day, data = data, FUN = sum)
+
+# Find out which day of the week had the most frequent 1st place finishes
+first_place_days <- first_place_days[order(-first_place_days$first_place_count), ]
+
+# Return the day with the most 1st place finishes
+day_most_first_places <- first_place_days$day[1]
+day_most_first_places_count <- first_place_days$first_place_count[1]
+
+list(day = day_most_first_places, count = day_most_first_places_count)
+```
+I guess Wednesday was our most commonly played day. We also got the most 1st places on Wednesday as well (30)
+
+```{r getting plot data started, include=FALSE} 
+# get the highest kills data 
+highest_kills_dj <- aggregate(data$djkill, by = list(data$dlegend), max)
+names(highest_kills_dj) <- c("dlegend", "djkill")
+highest_kills_dj <- highest_kills_dj[order(-highest_kills_dj$djkill),]
+ 
+highest_kills_pop <- aggregate(data$popkill, by = list(data$plegend), max)
+names(highest_kills_pop) <- c("plegend", "popkill")
+highest_kills_pop <- highest_kills_pop[order(-highest_kills_pop$popkill),]
+ 
+highest_kills_spoon <- aggregate(data$spoonkill, by = list(data$slegend), max)
+names(highest_kills_spoon) <- c("slegend", "spoonkill")
+highest_kills_spoon <- highest_kills_spoon[order(-highest_kills_spoon$spoonkill),]
+
+# get the damage per legend data
+
+# DJ damage per legend
+dj_damage_per_legend <- aggregate(data$djdmg, by = list(data$dlegend), sum)
+names(dj_damage_per_legend) <- c("dlegend", "djdmg")
+
+# Pop damage per legend
+pop_damage_per_legend <- aggregate(data$popdmg, by = list(data$plegend), sum)
+names(pop_damage_per_legend) <- c("plegend", "popdmg")
+
+# Spoon damage per legend
+spoon_damage_per_legend <- aggregate(data$spoondmg, by = list(data$slegend), sum)
+names(spoon_damage_per_legend) <- c("slegend", "spoondmg")
+
+# Reset index
+dj_damage_per_legend <- dj_damage_per_legend[order(dj_damage_per_legend$dlegend), , drop=FALSE]
+pop_damage_per_legend <- pop_damage_per_legend[order(pop_damage_per_legend$plegend), , drop=FALSE]
+spoon_damage_per_legend <- spoon_damage_per_legend[order(spoon_damage_per_legend$slegend), , drop=FALSE]
+
+```
+
+```{r dj damage distribution, echo=FALSE}
+
+# ucfirst function takes a string as input and returns the same string with first letter capitalized
+
+ucfirst <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  return(x)
+}
+
+# define the user and corresponding data
+user <- 'dj'  # change this to 'dj', 'spoon' or 'pop'
+damage_data <- switch(user,
+                      'pop' = pop_damage_per_legend,
+                      'dj' = dj_damage_per_legend,
+                      'spoon' = spoon_damage_per_legend)
+
+# calculate percentage labels based on the data
+percent_labels <- paste0(round((damage_data[,2] / sum(damage_data[,2])) * 100, 1), "%")
+
+# pie chart with adjustments
+pie3D(damage_data[,2], labels = paste0(damage_data[,1], "\n", percent_labels), main = paste(ucfirst(user), "Damage Distribution by Legend"), labelcex = 0.8, col = rainbow(length(damage_data[,1])))
+
+# define the legend position
+legend_x <- max(par("usr")[1:2]) + 0.3  # move slightly more towards the right
+legend_y <- mean(par("usr")[3:4]) + 1 # move slightly upwards
+
+# legend
+par(xpd = TRUE)
+legend(legend_x, legend_y, legend = paste(damage_data[,1], percent_labels), fill = rainbow(length(damage_data[,1])), cex = 0.7, bty = "n", xpd = NA)
+par(xpd = FALSE)
+
+# violin plot
+# ggplot(data = data, aes(x = dlegend, y = djdmg, fill = dlegend)) +
+#   geom_violin() +
+#   scale_fill_discrete(guide = FALSE) +
+#   labs(title = "DJ Damage Distribution by Legend", x = "Legend", y = "Total Damage")
+
+```
+
+DJ has 3 characters that total about 60% of the damage distribution. Horizon, Pathfinder, and Gibraltar. 
+
+```{r pop damage distribution, echo=FALSE}
+
+# define the user and corresponding data
+user <- 'pop'  # change this to 'dj', 'spoon' or 'pop'
+damage_data <- switch(user,
+                      'pop' = pop_damage_per_legend,
+                      'dj' = dj_damage_per_legend,
+                      'spoon' = spoon_damage_per_legend)
+
+# calculate percentage labels based on the data
+percent_labels <- paste0(round((damage_data[,2] / sum(damage_data[,2])) * 100, 1), "%")
+
+# pie chart with adjustments
+pie3D(damage_data[,2], labels = paste0(damage_data[,1], "\n", percent_labels), main = paste(ucfirst(user), "Damage Distribution by Legend"), labelcex = 0.8, col = rainbow(length(damage_data[,1])))
+
+# define the legend position
+legend_x <- max(par("usr")[1:2]) + 0.3  # move slightly more towards the right
+legend_y <- mean(par("usr")[3:4]) + 1  # move slightly upwards
+
+# legend
+par(xpd = TRUE)
+legend(legend_x, legend_y, legend = paste(damage_data[,1], percent_labels), fill = rainbow(length(damage_data[,1])), cex = 0.7, bty = "n", xpd = NA)
+par(xpd = FALSE)
+```
+
+Popshot has 2 characters that account for about 60% of the damage distribution. Bloodhound and Lifeline.
+
+```{r spoon damage distribution, echo=FALSE}
+# define the user and corresponding data
+user <- 'spoon'  # change this to 'dj', 'spoon' or 'pop'
+damage_data <- switch(user,
+                      'pop' = pop_damage_per_legend,
+                      'dj' = dj_damage_per_legend,
+                      'spoon' = spoon_damage_per_legend)
+
+# calculate percentage labels based on the data
+percent_labels <- paste0(round((damage_data[,2] / sum(damage_data[,2])) * 100, 1), "%")
+
+# pie chart with adjustments
+pie3D(damage_data[,2], labels = paste0(damage_data[,1], "\n", percent_labels), main = paste(ucfirst(user), "Damage Distribution by Legend"), labelcex = 0.8, col = rainbow(length(damage_data[,1])))
+
+# define the legend position
+legend_x <- max(par("usr")[1:2]) + 0.3  # move slightly more towards the right
+legend_y <- mean(par("usr")[3:4]) + 1  # move slightly upwards
+
+# legend
+par(xpd = TRUE)
+legend(legend_x, legend_y, legend = paste(damage_data[,1], percent_labels), fill = rainbow(length(damage_data[,1])), cex = 0.7, bty = "n", xpd = NA)
+par(xpd = FALSE)
+```
+
+Spoon results were easy to spot from a mile away, seeing the number of games on Octane from earlier.
+
+```{r writing out summation code, include=FALSE}
+# Summarize data for 'dlegend'
+dj_summation <- aggregate(data[c("djdmg", "djkill")], by = list(data$dlegend), FUN = sum)
+colnames(dj_summation) <- c("legend", "djdmg", "djkill")
+dj_summation <- dj_summation[order(-dj_summation$djdmg, -dj_summation$djkill), ]
+
+# Summarize data for 'plegend'
+pop_summation <- aggregate(data[c("popdmg", "popkill")], by = list(data$plegend), FUN = sum)
+colnames(pop_summation) <- c("legend", "popdmg", "popkill")
+pop_summation <- pop_summation[order(-pop_summation$popdmg, -pop_summation$popkill), ]
+
+# Summarize data for 'slegend'
+spoon_summation <- aggregate(data[c("spoondmg", "spoonkill")], by = list(data$slegend), FUN = sum)
+colnames(spoon_summation) <- c("legend", "spoondmg", "spoonkill")
+spoon_summation <- spoon_summation[order(-spoon_summation$spoondmg, -spoon_summation$spoonkill), ]
+
+```
+
+# When do we win?
+
+Here we will focus on what the scenario is when we win. Is it a specific character for each player, or maybe a team of 3 specific legends.
+
+## First place frequencies
+
+##### DJ First place frequencies
+
+```{r dj first place frequencies, echo=FALSE}
+dj_first_place_freq <- data %>%
+  filter(placing == '1') %>%
+  group_by(dlegend, location) %>%
+  summarise(frequency = n(), .groups = 'drop')
+
+ggplot(dj_first_place_freq, aes(x = dlegend, y = frequency, fill = location)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7)) +
+  geom_text(aes(label = frequency), vjust = -0.5, position = position_dodge(width = 0.7)) +
+  labs(x = "DJ's Legend", y = "Frequency of Placing First", fill = "Location") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# dj_first_place_freq # raw values without the plot
+```
+It's clear to see that for DJ had favorites for each respective map. Olympus was a favorite for Horizon, World's Edge was most Gibraltar, and on Kings Canyon we saw more Pathfinder.
+
+##### Pop First place frequencies
+
+```{r pop first place frequencies, echo=FALSE}
+pop_first_place_freq <- data %>%
+  filter(placing == '1') %>%
+  group_by(plegend, location) %>%
+  summarise(frequency = n(), .groups = 'drop')
+
+ggplot(pop_first_place_freq, aes(x = plegend, y = frequency, fill = location)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7)) +
+  geom_text(aes(label = frequency), vjust = -0.5, position = position_dodge(width = 0.7)) +
+  labs(x = "Pop's Legend", y = "Frequency of Placing First", fill = "Location") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# pop_first_place_freq # raw values without the plot
+```
+Clearly for Pop, Bloodhound was a fan favorite and a crucial character pick to getting a first place. Lifeline on World's Edge picked up Bloodhound's shortcomings on the map.
+
+##### Spoon first place frequencies
+
+```{r Spoon first place frequencies, echo=FALSE}
+spoon_first_place_freq <- data %>%
+  filter(placing == '1') %>%
+  group_by(slegend, location) %>%
+  summarise(frequency = n(), .groups = 'drop')
+
+ggplot(spoon_first_place_freq, aes(x = slegend, y = frequency, fill = location)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7)) +
+  geom_text(aes(label = frequency), vjust = -0.5, position = position_dodge(width = 0.7)) +
+  labs(x = "Spoon's Legend", y = "Frequency of Placing First", fill = "Location") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# spoon_first_place_freq # raw values without the plot
+```
+To no one's surprise, Octane was vital to getting a victory on all maps. This is probably due to sheer playtime on Octane though.
+
+### What about team combinations?
+
+```{r team first place frequencies, echo=FALSE}
+# filter for 1st place placings
+first_place_data <- data %>% filter(placing == '1')
+
+# group by characters and location to get the frequency of 1st place finishes
+frequency_data <- data %>%
+  filter(placing == '1') %>%
+  group_by(dlegend, plegend, slegend, location) %>%
+  summarise(frequency = n(), .groups = 'drop') %>%
+  filter(frequency > 1) # including only team combinations with more than one first place placing
+
+# create a combined legend name for plotting
+frequency_data <- frequency_data %>%
+  mutate(combined_legend = paste(dlegend, plegend, slegend, sep = "_"))
+
+# bar plot with rotated x-axis labels and spaced bars
+ggplot(frequency_data, aes(x = combined_legend, y = frequency, fill = location)) +
+  geom_bar(stat = "identity", position = position_dodge(width = .8)) +
+  labs(x = "Character Combinations", y = "Frequency of 1st Place", fill = "Location") +
+  ggtitle("Frequency of 1st Place by Character Lineup and Location") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.title = element_text(size = 10))
+
+# frequency_data
+```
+On Olympus the prime trio was Horizon from DJ, Bloodhound from Pop, and Octane from Spoon of course. This might be due to Horizon's strength on Olympus. Interestingly, on Kings Canyon, Revenant from DJ, Bloodhound from Pop, and Octane from Spoon was the best trio on that map. This is explained to due to RevTane meta, where Revenant and Octane on a team meant free kills. 
+
+### Are we better in ranked or pub matches?
+
+```{r ranked or pubs, echo=FALSE, message=FALSE}
+
+# filter for 1st place placings and mode is either 'pub' or 'ranked'
+first_place_pub_data <- data[data$placing == 1 & data$mode == 'pub', ]
+first_place_ranked_data <- data[data$placing == 1 & data$mode == 'ranked', ]
+
+# group by characters and location to get the frequency of 1st place finishes for pub and ranked
+frequency_pub_data <- first_place_pub_data %>%
+  group_by(dlegend, plegend, slegend, location) %>%
+  summarise(frequency = n()) %>%
+  ungroup() %>%
+   filter(frequency > 1) # include only legend groupings with more than 1 first placing, or else the plot will become messy
+
+
+frequency_ranked_data <- first_place_ranked_data %>%
+  group_by(dlegend, plegend, slegend, location) %>%
+  summarise(frequency = n()) %>%
+  ungroup() %>%
+   filter(frequency > 1) # include only legend groupings with more than 1 first placing, or else the plot will become messy
+
+
+# combine the data frames for plotting
+combined_data_pub <- frequency_pub_data %>%
+  mutate(character_combination = paste(dlegend, plegend, slegend, sep = "_"))
+
+combined_data_ranked <- frequency_ranked_data %>%
+  mutate(character_combination = paste(dlegend, plegend, slegend, sep = "_"))
+
+#  bar plot for PUB
+ggplot(combined_data_pub, aes(x = character_combination, y = frequency, fill = location)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Character Combinations", y = "Frequency of 1st Place", fill = "Location") +
+  ggtitle("Frequency of 1st Place for PUB Mode") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  theme_minimal() +
+  theme(legend.title = element_text(size = 10)) +
+  coord_flip()
+
+# bar plot for Ranked
+ggplot(combined_data_ranked, aes(x = character_combination, y = frequency, fill = location)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Character Combinations", y = "Frequency of 1st Place", fill = "Location") +
+  ggtitle("Frequency of 1st Place for Ranked Mode") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  theme_minimal() +
+  theme(legend.title = element_text(size = 10)) +
+  coord_flip()
+
+```
+
+For both modes, it seems like Horizon + Bloodhound + Octane was the all star squad, on Olympus at least.
+
+```{r pubs vs ranked percentage distribution, echo=FALSE}
+# count number of pub matches and ranked matches
+mode_counts <- data %>%
+  group_by(mode) %>%
+  summarise(count = n()) %>%
+  filter(mode %in% c("pub", "ranked"))
+
+# calculate the fraction of ranked games won out of all ranked games
+ranked_games_won <- nrow(subset(data, mode == "ranked" & placing == "1"))
+total_ranked_games <- nrow(subset(data, mode == "ranked"))
+
+fraction_ranked_won <- ranked_games_won / total_ranked_games
+
+# do the same for pubs
+
+# calculate the fraction of pub games won out of all pub games
+pub_games_won <- nrow(subset(data, mode == "pub" & placing == "1"))
+total_pub_games <- nrow(subset(data, mode == "pub"))
+
+fraction_pub_won <- pub_games_won / total_pub_games
+
+# filter for first place placings and count frequencies in pub vs ranked mode
+first_place_freq <- data %>%
+  filter(placing == "1") %>%
+  group_by(mode) %>%
+  summarise(count = n()) %>%
+  ungroup() %>%
+  mutate(percentage = count / sum(count) * 100)
+
+# create a labeled pie chart with percentages
+labeled_pie_chart <- ggplot(first_place_freq, aes(x = "", y = percentage, fill = mode)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  geom_label(aes(label = sprintf("%s (%.1f%%)", mode, percentage)), position = position_stack(vjust = 0.5)) +
+  theme_void() +
+  labs(fill = "Mode", title = "First place frequencies in PUB vs Ranked mode")
+
+# pie chart and mode count
+print(labeled_pie_chart)
+mode_counts
+fraction_ranked_won
+fraction_pub_won
+
+```
+Although the pie chart shows that around 60% of 1st places comes from pubs, and 40% comes from ranked, this could be brushed off as saying pub is easier, but really it is due to the high count of pub matches played. 346 pub matches played, and only 169 ranked matches played. It's arguable to say that we do better in ranked, since we win a higher percentage of ranked games out of all the ranked games played, a 32% win rate, while in pubs our win rate is only 25%.
+
+
+# Scoring
+
+## Scoring method - Kill and Damage weighted
+
+```{r sm1}
+# define kill and damage weights
+kill_weight <- 0.55
+damage_weight <- 0.45
+
+# define a list to store scores for each legend
+legend_scores <- list()
+
+# list of legend columns and their corresponding kill and damage columns
+legend_columns <- c('dlegend', 'plegend', 'slegend')
+kill_columns <- c('djkill', 'popkill', 'spoonkill')
+damage_columns <- c('djdmg', 'popdmg', 'spoondmg')
+
+# iterate over each legend
+for (i in seq_along(legend_columns)) {
+    # compute the score for the current legend
+    legend_score <- (data[[kill_columns[i]]] * kill_weight) + (data[[damage_columns[i]]] * damage_weight)
+    # store the mean of scores divided by 1000 in the list
+    legend_scores[[legend_columns[i]]] <- mean(legend_score) / 1000
+}
+
+# print
+for (legend in names(legend_scores)) {
+    cat(paste("Score for", legend,":", legend_scores[[legend]], "\n"))
+}
+```
+The scoring method is pretty simple, we just determined we value kills a bit more than damage, so I gave kills a little more significance when determining the 1st score. There's not much that goes into the score besides kills and damage.
+
+# Wrap Up
+Wrapping up, I found:
+
+- each users best character
+- our best combinations as a team
+- each users score based on their overall damage and kills
+- our gameplay in ranked vs pub lobbies
+- first place frequencies, individually and as a team
+- what day of the week we play the most and win the most on
+- damage distribution for each user
+
+Next iteration, on top of what is already found here, there will be more variables to look at, such as assists, knocks, revives, respawns, etc as well as Machine Learning techniques like regression or decision trees.
+
+
+
+
+
+
+
+
